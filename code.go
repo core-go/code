@@ -44,7 +44,7 @@ type SqlCodeLoader struct {
 	DB     *sql.DB
 	Table  string
 	Config CodeConfig
-	Driver string
+	Build  func(i int) string
 }
 type DynamicSqlCodeLoader struct {
 	DB             *sql.DB
@@ -117,8 +117,8 @@ func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeMo
 	return models, nil
 }
 func NewSqlCodeLoader(db *sql.DB, table string, config CodeConfig) *SqlCodeLoader {
-	driver := getDriver(db)
-	return &SqlCodeLoader{DB: db, Table: table, Config: config, Driver: driver}
+	build := getBuild(db)
+	return &SqlCodeLoader{DB: db, Table: table, Config: config, Build: build}
 }
 
 func buildParam(i int) string {
@@ -164,26 +164,13 @@ func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, er
 	p1 := ""
 	i := 1
 	if len(c.Master) > 0 {
-		if l.Driver == DriverPostgres {
-			p1 = fmt.Sprintf("%s = $%d", c.Master, i)
-		} else if l.Driver == DriverOracle {
-			p1 = fmt.Sprintf("%s = :val%d", c.Master, i)
-		} else {
-			p1 = fmt.Sprintf("%s = ?", c.Master)
-		}
+		p1 = fmt.Sprintf("%s = %s", c.Master, l.Build(i))
 		i = i + 1
 		values = append(values, master)
 	}
 	cols := strings.Join(s, ",")
 	if len(c.Status) > 0 && c.Active != nil {
-		p2 := ""
-		if l.Driver == DriverPostgres {
-			p2 = fmt.Sprintf("%s = $%d", c.Status, i)
-		} else if l.Driver == DriverOracle {
-			p2 = fmt.Sprintf("%s = :val%d", c.Status, i)
-		} else {
-			p2 = fmt.Sprintf("%s = ?", c.Status)
-		}
+		p2 := fmt.Sprintf("%s = %s", c.Status, l.Build(i))
 		values = append(values, c.Active)
 		if cols == "" {
 			cols = "*"
@@ -297,7 +284,17 @@ func scanType(rows *sql.Rows, modelTypes reflect.Type, indexes []int) (t []inter
 	}
 	return
 }
-
+func getBuild(db *sql.DB) func(i int) string {
+	driver := reflect.TypeOf(db.Driver()).String()
+	switch driver {
+	case "*pq.Driver":
+		return buildDollarParam
+	case "*godror.drv":
+		return buildOracleParam
+	default:
+		return buildParam
+	}
+}
 func getDriver(db *sql.DB) string {
 	driver := reflect.TypeOf(db.Driver()).String()
 	switch driver {
