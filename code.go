@@ -45,23 +45,38 @@ type SqlCodeLoader struct {
 	Table  string
 	Config CodeConfig
 	Build  func(i int) string
+	Map    func(col string) string
 }
 type DynamicSqlCodeLoader struct {
 	DB             *sql.DB
 	Query          string
 	ParameterCount int
-	Driver         string
+	Build          func(string) string
 }
 
-func NewDefaultDynamicSqlCodeLoader(db *sql.DB, query string) *DynamicSqlCodeLoader {
-	driver := getDriver(db)
-	return &DynamicSqlCodeLoader{DB: db, Query: query, ParameterCount: 0, Driver: driver}
-	return NewDynamicSqlCodeLoader(db, query, 0, true)
+func NewDefaultDynamicSqlCodeLoader(db *sql.DB, query string, options...int) *DynamicSqlCodeLoader {
+	var parameterCount int
+	if len(options) >= 1 && options[0] > 0 {
+		parameterCount = options[0]
+	} else {
+		parameterCount = 0
+	}
+	return NewDynamicSqlCodeLoader(db, query, parameterCount, true)
 }
-func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, handleDriver bool) *DynamicSqlCodeLoader {
+func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, options...bool) *DynamicSqlCodeLoader {
 	driver := getDriver(db)
+	var build func(string) string
+	if driver == DriverOracle {
+		build = strings.ToUpper
+	}
 	if parameterCount <= 0 {
 		parameterCount = 1
+	}
+	var handleDriver bool
+	if len(options) >= 1 {
+		handleDriver = options[0]
+	} else {
+		handleDriver = true
 	}
 	if handleDriver {
 		if driver == DriverOracle || driver == DriverPostgres {
@@ -77,7 +92,7 @@ func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, handl
 			}
 		}
 	}
-	return &DynamicSqlCodeLoader{DB: db, Query: query, ParameterCount: parameterCount, Driver: driver}
+	return &DynamicSqlCodeLoader{DB: db, Query: query, ParameterCount: parameterCount, Build: build}
 }
 func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, error) {
 	models := make([]CodeModel, 0)
@@ -88,7 +103,6 @@ func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeMo
 			params = append(params, master)
 		}
 	}
-	driver := l.Driver
 	rows, er1 := l.DB.Query(l.Query, params...)
 	if er1 != nil {
 		return models, er1
@@ -101,7 +115,7 @@ func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeMo
 	// get list indexes column
 	modelTypes := reflect.TypeOf(models).Elem()
 	modelType := reflect.TypeOf(CodeModel{})
-	indexes, er3 := getColumnIndexes(modelType, columns, driver)
+	indexes, er3 := getColumnIndexes(modelType, columns, l.Build)
 	if er3 != nil {
 		return models, er3
 	}
@@ -118,17 +132,12 @@ func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeMo
 }
 func NewSqlCodeLoader(db *sql.DB, table string, config CodeConfig) *SqlCodeLoader {
 	build := getBuild(db)
-	return &SqlCodeLoader{DB: db, Table: table, Config: config, Build: build}
-}
-
-func buildParam(i int) string {
-	return "?"
-}
-func buildOracleParam(i int) string {
-	return ":val" + strconv.Itoa(i)
-}
-func buildDollarParam(i int) string {
-	return "$" + strconv.Itoa(i)
+	driver := getDriver(db)
+	var mp func(string)string
+	if driver == DriverOracle {
+		mp = strings.ToUpper
+	}
+	return &SqlCodeLoader{DB: db, Table: table, Config: config, Build: build, Map: mp}
 }
 func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, error) {
 	models := make([]CodeModel, 0)
@@ -203,7 +212,7 @@ func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, er
 		// get list indexes column
 		modelTypes := reflect.TypeOf(models).Elem()
 		modelType := reflect.TypeOf(CodeModel{})
-		indexes, er2 := getColumnIndexes(modelType, columns, getDriver(l.DB))
+		indexes, er2 := getColumnIndexes(modelType, columns, l.Map)
 		if er2 != nil {
 			return nil, er2
 		}
@@ -230,7 +239,7 @@ func structScan(s interface{}, indexColumns []int) (r []interface{}) {
 	}
 	return
 }
-func getColumnIndexes(modelType reflect.Type, columnsName []string, driver string) (indexes []int, err error) {
+func getColumnIndexes(modelType reflect.Type, columnsName []string, build func(string) string) (indexes []int, err error) {
 	if modelType.Kind() != reflect.Struct {
 		return nil, errors.New("bad type")
 	}
@@ -238,8 +247,8 @@ func getColumnIndexes(modelType reflect.Type, columnsName []string, driver strin
 		field := modelType.Field(i)
 		ormTag := field.Tag.Get("gorm")
 		column, ok := findTag(ormTag, "column")
-		if driver == DriverOracle {
-			column = strings.ToUpper(column)
+		if build != nil {
+			column = build(column)
 		}
 		if ok {
 			if contains(columnsName, column) {
@@ -249,7 +258,6 @@ func getColumnIndexes(modelType reflect.Type, columnsName []string, driver strin
 	}
 	return
 }
-
 func findTag(tag string, key string) (string, bool) {
 	if has := strings.Contains(tag, key); has {
 		str1 := strings.Split(tag, ";")
@@ -283,6 +291,16 @@ func scanType(rows *sql.Rows, modelTypes reflect.Type, indexes []int) (t []inter
 		}
 	}
 	return
+}
+
+func buildParam(i int) string {
+	return "?"
+}
+func buildOracleParam(i int) string {
+	return ":val" + strconv.Itoa(i)
+}
+func buildDollarParam(i int) string {
+	return "$" + strconv.Itoa(i)
 }
 func getBuild(db *sql.DB) func(i int) string {
 	driver := reflect.TypeOf(db.Driver()).String()
