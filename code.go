@@ -54,12 +54,12 @@ type DynamicSqlCodeLoader struct {
 }
 
 func NewDefaultDynamicSqlCodeLoader(db *sql.DB, query string) *DynamicSqlCodeLoader {
-	driver := GetDriver(db)
+	driver := getDriver(db)
 	return &DynamicSqlCodeLoader{DB: db, Query: query, ParameterCount: 0, Driver: driver}
 	return NewDynamicSqlCodeLoader(db, query, 0, true)
 }
 func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, handleDriver bool) *DynamicSqlCodeLoader {
-	driver := GetDriver(db)
+	driver := getDriver(db)
 	if parameterCount <= 0 {
 		parameterCount = 1
 	}
@@ -101,11 +101,11 @@ func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeMo
 	// get list indexes column
 	modelTypes := reflect.TypeOf(models).Elem()
 	modelType := reflect.TypeOf(CodeModel{})
-	indexes, er3 := GetColumnIndexes(modelType, columns, driver)
+	indexes, er3 := getColumnIndexes(modelType, columns, driver)
 	if er3 != nil {
 		return models, er3
 	}
-	tb, er4 := ScanType(rows, modelTypes, indexes)
+	tb, er4 := scanType(rows, modelTypes, indexes)
 	if er4 != nil {
 		return models, er4
 	}
@@ -117,8 +117,18 @@ func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeMo
 	return models, nil
 }
 func NewSqlCodeLoader(db *sql.DB, table string, config CodeConfig) *SqlCodeLoader {
-	driver := GetDriver(db)
+	driver := getDriver(db)
 	return &SqlCodeLoader{DB: db, Table: table, Config: config, Driver: driver}
+}
+
+func buildParam(i int) string {
+	return "?"
+}
+func buildOracleParam(i int) string {
+	return ":val" + strconv.Itoa(i)
+}
+func buildDollarParam(i int) string {
+	return "$" + strconv.Itoa(i)
 }
 func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, error) {
 	models := make([]CodeModel, 0)
@@ -154,14 +164,14 @@ func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, er
 	p1 := ""
 	i := 1
 	if len(c.Master) > 0 {
-		i = i + 1
 		if l.Driver == DriverPostgres {
-			p1 = fmt.Sprintf("%s = $1", c.Master)
+			p1 = fmt.Sprintf("%s = $%d", c.Master, i)
 		} else if l.Driver == DriverOracle {
-			p1 = fmt.Sprintf("%s = :val1", c.Master)
+			p1 = fmt.Sprintf("%s = :val%d", c.Master, i)
 		} else {
 			p1 = fmt.Sprintf("%s = ?", c.Master)
 		}
+		i = i + 1
 		values = append(values, master)
 	}
 	cols := strings.Join(s, ",")
@@ -170,7 +180,7 @@ func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, er
 		if l.Driver == DriverPostgres {
 			p2 = fmt.Sprintf("%s = $%d", c.Status, i)
 		} else if l.Driver == DriverOracle {
-			p1 = fmt.Sprintf("%s = :val%d", c.Status, i)
+			p2 = fmt.Sprintf("%s = :val%d", c.Status, i)
 		} else {
 			p2 = fmt.Sprintf("%s = ?", c.Status)
 		}
@@ -194,18 +204,6 @@ func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, er
 		}
 	}
 	if len(sql2) > 0 {
-		if l.Driver == DriverOracle || l.Driver == DriverPostgres {
-			var x string
-			if l.Driver == DriverOracle {
-				x = ":val"
-			} else {
-				x = "$"
-			}
-			for i := 0; i < len(values); i++ {
-				count := i + 1
-				sql2 = strings.Replace(sql2, "?", x+strconv.Itoa(count), 1)
-			}
-		}
 		rows, err1 := l.DB.Query(sql2, values...)
 		if err1 != nil {
 			return nil, err1
@@ -218,11 +216,11 @@ func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, er
 		// get list indexes column
 		modelTypes := reflect.TypeOf(models).Elem()
 		modelType := reflect.TypeOf(CodeModel{})
-		indexes, er2 := GetColumnIndexes(modelType, columns, GetDriver(l.DB))
+		indexes, er2 := getColumnIndexes(modelType, columns, getDriver(l.DB))
 		if er2 != nil {
 			return nil, er2
 		}
-		tb, er3 := ScanType(rows, modelTypes, indexes)
+		tb, er3 := scanType(rows, modelTypes, indexes)
 		if er3 != nil {
 			return nil, er3
 		}
@@ -236,7 +234,7 @@ func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, er
 }
 
 // StructScan : transfer struct to slice for scan
-func StructScan(s interface{}, indexColumns []int) (r []interface{}) {
+func structScan(s interface{}, indexColumns []int) (r []interface{}) {
 	if s != nil {
 		maps := reflect.Indirect(reflect.ValueOf(s))
 		for _, index := range indexColumns {
@@ -245,15 +243,14 @@ func StructScan(s interface{}, indexColumns []int) (r []interface{}) {
 	}
 	return
 }
-
-func GetColumnIndexes(modelType reflect.Type, columnsName []string, driver string) (indexes []int, err error) {
+func getColumnIndexes(modelType reflect.Type, columnsName []string, driver string) (indexes []int, err error) {
 	if modelType.Kind() != reflect.Struct {
 		return nil, errors.New("bad type")
 	}
 	for i := 0; i < modelType.NumField(); i++ {
 		field := modelType.Field(i)
 		ormTag := field.Tag.Get("gorm")
-		column, ok := FindTag(ormTag, "column")
+		column, ok := findTag(ormTag, "column")
 		if driver == DriverOracle {
 			column = strings.ToUpper(column)
 		}
@@ -266,7 +263,7 @@ func GetColumnIndexes(modelType reflect.Type, columnsName []string, driver strin
 	return
 }
 
-func FindTag(tag string, key string) (string, bool) {
+func findTag(tag string, key string) (string, bool) {
 	if has := strings.Contains(tag, key); has {
 		str1 := strings.Split(tag, ";")
 		num := len(str1)
@@ -291,17 +288,17 @@ func contains(array []string, v string) bool {
 	return false
 }
 
-func ScanType(rows *sql.Rows, modelTypes reflect.Type, indexes []int) (t []interface{}, err error) {
+func scanType(rows *sql.Rows, modelTypes reflect.Type, indexes []int) (t []interface{}, err error) {
 	for rows.Next() {
 		initArray := reflect.New(modelTypes).Interface()
-		if err = rows.Scan(StructScan(initArray, indexes)...); err == nil {
+		if err = rows.Scan(structScan(initArray, indexes)...); err == nil {
 			t = append(t, initArray)
 		}
 	}
 	return
 }
 
-func GetDriver(db *sql.DB) string {
+func getDriver(db *sql.DB) string {
 	driver := reflect.TypeOf(db.Driver()).String()
 	switch driver {
 	case "*pq.Driver":
