@@ -51,7 +51,7 @@ type DynamicSqlCodeLoader struct {
 	DB             *sql.DB
 	Query          string
 	ParameterCount int
-	Build          func(string) string
+	Map            func(string) string
 }
 
 func NewDefaultDynamicSqlCodeLoader(db *sql.DB, query string, options...int) *DynamicSqlCodeLoader {
@@ -65,9 +65,9 @@ func NewDefaultDynamicSqlCodeLoader(db *sql.DB, query string, options...int) *Dy
 }
 func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, options...bool) *DynamicSqlCodeLoader {
 	driver := getDriver(db)
-	var build func(string) string
+	var mp func(string) string
 	if driver == DriverOracle {
-		build = strings.ToUpper
+		mp = strings.ToUpper
 	}
 	if parameterCount <= 0 {
 		parameterCount = 1
@@ -92,7 +92,7 @@ func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, optio
 			}
 		}
 	}
-	return &DynamicSqlCodeLoader{DB: db, Query: query, ParameterCount: parameterCount, Build: build}
+	return &DynamicSqlCodeLoader{DB: db, Query: query, ParameterCount: parameterCount, Map: mp}
 }
 func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, error) {
 	models := make([]CodeModel, 0)
@@ -115,7 +115,7 @@ func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeMo
 	// get list indexes column
 	modelTypes := reflect.TypeOf(models).Elem()
 	modelType := reflect.TypeOf(CodeModel{})
-	indexes, er3 := getColumnIndexes(modelType, columns, l.Build)
+	indexes, er3 := getColumnIndexes(modelType, columns, l.Map)
 	if er3 != nil {
 		return models, er3
 	}
