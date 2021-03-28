@@ -15,6 +15,7 @@ const (
 	DriverMysql      = "mysql"
 	DriverMssql      = "mssql"
 	DriverOracle     = "oracle"
+	DriverSqlite3    = "sqlite3"
 	DriverNotSupport = "no support"
 )
 
@@ -54,7 +55,7 @@ type DynamicSqlCodeLoader struct {
 	Map            func(string) string
 }
 
-func NewDefaultDynamicSqlCodeLoader(db *sql.DB, query string, options...int) *DynamicSqlCodeLoader {
+func NewDefaultDynamicSqlCodeLoader(db *sql.DB, query string, options ...int) *DynamicSqlCodeLoader {
 	var parameterCount int
 	if len(options) >= 1 && options[0] > 0 {
 		parameterCount = options[0]
@@ -63,7 +64,7 @@ func NewDefaultDynamicSqlCodeLoader(db *sql.DB, query string, options...int) *Dy
 	}
 	return NewDynamicSqlCodeLoader(db, query, parameterCount, true)
 }
-func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, options...bool) *DynamicSqlCodeLoader {
+func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, options ...bool) *DynamicSqlCodeLoader {
 	driver := getDriver(db)
 	var mp func(string) string
 	if driver == DriverOracle {
@@ -79,12 +80,14 @@ func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, optio
 		handleDriver = true
 	}
 	if handleDriver {
-		if driver == DriverOracle || driver == DriverPostgres {
+		if driver == DriverOracle || driver == DriverPostgres || driver == DriverMssql {
 			var x string
 			if driver == DriverOracle {
 				x = ":val"
-			} else {
+			} else if driver == DriverPostgres {
 				x = "$"
+			} else if driver == DriverMssql {
+				x = "@p"
 			}
 			for i := 0; i < parameterCount; i++ {
 				count := i + 1
@@ -103,7 +106,7 @@ func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeMo
 			params = append(params, master)
 		}
 	}
-	rows, er1 := l.DB.Query(l.Query, params...)
+	rows, er1 := l.DB.QueryContext(ctx, l.Query, params...)
 	if er1 != nil {
 		return models, er1
 	}
@@ -130,10 +133,15 @@ func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeMo
 	}
 	return models, nil
 }
-func NewSqlCodeLoader(db *sql.DB, table string, config CodeConfig) *SqlCodeLoader {
-	build := getBuild(db)
+func NewSqlCodeLoader(db *sql.DB, table string, config CodeConfig, options...func(i int) string) *SqlCodeLoader {
+	var build func(i int) string
+	if len(options) > 0 && options[0] != nil {
+		build = options[0]
+	} else {
+		build = getBuild(db)
+	}
 	driver := getDriver(db)
-	var mp func(string)string
+	var mp func(string) string
 	if driver == DriverOracle {
 		mp = strings.ToUpper
 	}
@@ -200,7 +208,7 @@ func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, er
 		}
 	}
 	if len(sql2) > 0 {
-		rows, err1 := l.DB.Query(sql2, values...)
+		rows, err1 := l.DB.QueryContext(ctx, sql2, values...)
 		if err1 != nil {
 			return nil, err1
 		}
@@ -299,6 +307,9 @@ func buildParam(i int) string {
 func buildOracleParam(i int) string {
 	return ":val" + strconv.Itoa(i)
 }
+func buildMsSqlParam(i int) string {
+	return "@p" + strconv.Itoa(i)
+}
 func buildDollarParam(i int) string {
 	return "$" + strconv.Itoa(i)
 }
@@ -309,21 +320,28 @@ func getBuild(db *sql.DB) func(i int) string {
 		return buildDollarParam
 	case "*godror.drv":
 		return buildOracleParam
+	case "*mysql.MySQLDriver":
+		return buildMsSqlParam
 	default:
 		return buildParam
 	}
 }
 func getDriver(db *sql.DB) string {
+	if db == nil {
+		return DriverNotSupport
+	}
 	driver := reflect.TypeOf(db.Driver()).String()
 	switch driver {
 	case "*pq.Driver":
 		return DriverPostgres
+	case "*godror.drv":
+		return DriverOracle
 	case "*mysql.MySQLDriver":
 		return DriverMysql
 	case "*mssql.Driver":
 		return DriverMssql
-	case "*godror.drv":
-		return DriverOracle
+	case "*sqlite3.SQLiteDriver":
+		return DriverSqlite3
 	default:
 		return DriverNotSupport
 	}
