@@ -52,7 +52,7 @@ type DynamicSqlCodeLoader struct {
 	DB             *sql.DB
 	Query          string
 	ParameterCount int
-	Map            func(string) string
+	Map            func(col string) string
 }
 
 func NewDefaultDynamicSqlCodeLoader(db *sql.DB, query string, options ...int) *DynamicSqlCodeLoader {
@@ -320,7 +320,7 @@ func getBuild(db *sql.DB) func(i int) string {
 		return buildDollarParam
 	case "*godror.drv":
 		return buildOracleParam
-	case "*mysql.MySQLDriver":
+	case "*mssql.Driver":
 		return buildMsSqlParam
 	default:
 		return buildParam
