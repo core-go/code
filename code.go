@@ -19,7 +19,7 @@ const (
 	DriverNotSupport = "no support"
 )
 
-type CodeModel struct {
+type Model struct {
 	Id       string `mapstructure:"id" json:"id,omitempty" gorm:"column:id" bson:"id,omitempty" dynamodbav:"id,omitempty" firestore:"id,omitempty"`
 	Code     string `mapstructure:"code" json:"code,omitempty" gorm:"column:code" bson:"code,omitempty" dynamodbav:"code,omitempty" firestore:"code,omitempty"`
 	Value    string `mapstructure:"value" json:"value,omitempty" gorm:"column:value" bson:"value,omitempty" dynamodbav:"value,omitempty" firestore:"value,omitempty"`
@@ -27,7 +27,7 @@ type CodeModel struct {
 	Text     string `mapstructure:"text" json:"text,omitempty" gorm:"column:text" bson:"text,omitempty" dynamodbav:"text,omitempty" firestore:"text,omitempty"`
 	Sequence int32  `mapstructure:"sequence" json:"sequence,omitempty" gorm:"column:sequence" bson:"sequence,omitempty" dynamodbav:"sequence,omitempty" firestore:"sequence,omitempty"`
 }
-type CodeConfig struct {
+type StructureConfig struct {
 	Master   string      `mapstructure:"master" json:"master,omitempty" gorm:"column:master" bson:"master,omitempty" dynamodbav:"master,omitempty" firestore:"master,omitempty"`
 	Id       string      `mapstructure:"id" json:"id,omitempty" gorm:"column:id" bson:"id,omitempty" dynamodbav:"id,omitempty" firestore:"id,omitempty"`
 	Code     string      `mapstructure:"code" json:"code,omitempty" gorm:"column:code" bson:"code,omitempty" dynamodbav:"code,omitempty" firestore:"code,omitempty"`
@@ -38,17 +38,17 @@ type CodeConfig struct {
 	Status   string      `mapstructure:"status" json:"status,omitempty" gorm:"column:status" bson:"status,omitempty" dynamodbav:"status,omitempty" firestore:"status,omitempty"`
 	Active   interface{} `mapstructure:"active" json:"active,omitempty" gorm:"column:active" bson:"active,omitempty" dynamodbav:"active,omitempty" firestore:"active,omitempty"`
 }
-type CodeLoader interface {
-	Load(ctx context.Context, master string) ([]CodeModel, error)
+type Loader interface {
+	Load(ctx context.Context, master string) ([]Model, error)
 }
-type SqlCodeLoader struct {
+type SqlLoader struct {
 	DB     *sql.DB
 	Table  string
-	Config CodeConfig
+	Config StructureConfig
 	Build  func(i int) string
 	Map    func(col string) string
 }
-type DynamicSqlCodeLoader struct {
+type DynamicSqlLoader struct {
 	DB             *sql.DB
 	Query          string
 	ParameterCount int
@@ -56,7 +56,7 @@ type DynamicSqlCodeLoader struct {
 	driver         string
 }
 
-func NewDefaultDynamicSqlCodeLoader(db *sql.DB, query string, options ...int) *DynamicSqlCodeLoader {
+func NewDefaultDynamicSqlCodeLoader(db *sql.DB, query string, options ...int) *DynamicSqlLoader {
 	var parameterCount int
 	if len(options) > 0 {
 		parameterCount = options[0]
@@ -65,11 +65,13 @@ func NewDefaultDynamicSqlCodeLoader(db *sql.DB, query string, options ...int) *D
 	}
 	return NewDynamicSqlCodeLoader(db, query, parameterCount, true)
 }
-func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, options ...bool) *DynamicSqlCodeLoader {
+func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, options ...bool) *DynamicSqlLoader {
 	driver := getDriver(db)
 	var mp func(string) string
 	if driver == DriverOracle {
 		mp = strings.ToUpper
+	} else {
+		mp = strings.ToLower
 	}
 	if parameterCount < 0 {
 		parameterCount = 1
@@ -96,10 +98,10 @@ func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, optio
 			}
 		}
 	}
-	return &DynamicSqlCodeLoader{DB: db, Query: query, ParameterCount: parameterCount, Map: mp}
+	return &DynamicSqlLoader{DB: db, Query: query, ParameterCount: parameterCount, Map: mp}
 }
-func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, error) {
-	models := make([]CodeModel, 0)
+func (l DynamicSqlLoader) Load(ctx context.Context, master string) ([]Model, error) {
+	models := make([]Model, 0)
 
 	var rows *sql.Rows
 	var er1 error
@@ -122,7 +124,7 @@ func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeMo
 		return models, er2
 	}
 	// get list indexes column
-	modelType := reflect.TypeOf(CodeModel{})
+	modelType := reflect.TypeOf(Model{})
 
 	fieldsIndexSelected := make([]int, 0)
 	fieldsIndex, er3 := getColumnIndexes(modelType, l.Map)
@@ -139,13 +141,13 @@ func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeMo
 		return models, er4
 	}
 	for _, v := range tb {
-		if c, ok := v.(*CodeModel); ok {
+		if c, ok := v.(*Model); ok {
 			models = append(models, *c)
 		}
 	}
 	return models, nil
 }
-func NewSqlCodeLoader(db *sql.DB, table string, config CodeConfig, options ...func(i int) string) *SqlCodeLoader {
+func NewSqlCodeLoader(db *sql.DB, table string, config StructureConfig, options ...func(i int) string) *SqlLoader {
 	var build func(i int) string
 	if len(options) > 0 && options[0] != nil {
 		build = options[0]
@@ -157,10 +159,10 @@ func NewSqlCodeLoader(db *sql.DB, table string, config CodeConfig, options ...fu
 	if driver == DriverOracle {
 		mp = strings.ToUpper
 	}
-	return &SqlCodeLoader{DB: db, Table: table, Config: config, Build: build, Map: mp}
+	return &SqlLoader{DB: db, Table: table, Config: config, Build: build, Map: mp}
 }
-func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, error) {
-	models := make([]CodeModel, 0)
+func (l SqlLoader) Load(ctx context.Context, master string) ([]Model, error) {
+	models := make([]Model, 0)
 	s := make([]string, 0)
 	values := make([]interface{}, 0)
 	sql2 := ""
@@ -230,7 +232,7 @@ func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, er
 			return nil, er1
 		}
 		fieldsIndexSelected := make([]int, 0)
-		modelType := reflect.TypeOf(CodeModel{})
+		modelType := reflect.TypeOf(Model{})
 		// get list indexes column
 		fieldsIndex, er3 := getColumnIndexes(modelType, l.Map)
 		if er3 != nil {
@@ -246,7 +248,7 @@ func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, er
 			return nil, er3
 		}
 		for _, v := range tb {
-			if c, ok := v.(*CodeModel); ok {
+			if c, ok := v.(*Model); ok {
 				models = append(models, *c)
 			}
 		}
