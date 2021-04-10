@@ -53,14 +53,15 @@ type DynamicSqlCodeLoader struct {
 	Query          string
 	ParameterCount int
 	Map            func(col string) string
+	driver         string
 }
 
 func NewDefaultDynamicSqlCodeLoader(db *sql.DB, query string, options ...int) *DynamicSqlCodeLoader {
 	var parameterCount int
-	if len(options) >= 1 && options[0] > 0 {
+	if len(options) > 0 {
 		parameterCount = options[0]
 	} else {
-		parameterCount = 0
+		parameterCount = 1
 	}
 	return NewDynamicSqlCodeLoader(db, query, parameterCount, true)
 }
@@ -70,7 +71,7 @@ func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, optio
 	if driver == DriverOracle {
 		mp = strings.ToUpper
 	}
-	if parameterCount <= 0 {
+	if parameterCount < 0 {
 		parameterCount = 1
 	}
 	var handleDriver bool
@@ -99,14 +100,19 @@ func NewDynamicSqlCodeLoader(db *sql.DB, query string, parameterCount int, optio
 }
 func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, error) {
 	models := make([]CodeModel, 0)
-	params := make([]interface{}, 0)
-	params = append(params, master)
-	if l.ParameterCount > 1 {
-		for i := 2; i <= l.ParameterCount; i++ {
+
+	var rows *sql.Rows
+	var er1 error
+	if l.ParameterCount > 0 {
+		params := make([]interface{}, 0)
+		for i := 1; i <= l.ParameterCount; i++ {
 			params = append(params, master)
 		}
+		rows, er1 = l.DB.QueryContext(ctx, l.Query, params...)
+	} else {
+		rows, er1 = l.DB.QueryContext(ctx, l.Query)
 	}
-	rows, er1 := l.DB.QueryContext(ctx, l.Query, params...)
+
 	if er1 != nil {
 		return models, er1
 	}
@@ -116,13 +122,19 @@ func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeMo
 		return models, er2
 	}
 	// get list indexes column
-	modelTypes := reflect.TypeOf(models).Elem()
 	modelType := reflect.TypeOf(CodeModel{})
-	indexes, er3 := getColumnIndexes(modelType, columns, l.Map)
+
+	fieldsIndexSelected := make([]int, 0)
+	fieldsIndex, er3 := getColumnIndexes(modelType, l.Map)
 	if er3 != nil {
 		return models, er3
 	}
-	tb, er4 := scanType(rows, modelTypes, indexes)
+	for _, columnsName := range columns {
+		if index, ok := fieldsIndex[columnsName]; ok {
+			fieldsIndexSelected = append(fieldsIndexSelected, index)
+		}
+	}
+	tb, er4 := scanType(rows, modelType, fieldsIndexSelected)
 	if er4 != nil {
 		return models, er4
 	}
@@ -133,7 +145,7 @@ func (l DynamicSqlCodeLoader) Load(ctx context.Context, master string) ([]CodeMo
 	}
 	return models, nil
 }
-func NewSqlCodeLoader(db *sql.DB, table string, config CodeConfig, options...func(i int) string) *SqlCodeLoader {
+func NewSqlCodeLoader(db *sql.DB, table string, config CodeConfig, options ...func(i int) string) *SqlCodeLoader {
 	var build func(i int) string
 	if len(options) > 0 && options[0] != nil {
 		build = options[0]
@@ -217,14 +229,19 @@ func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, er
 		if er1 != nil {
 			return nil, er1
 		}
-		// get list indexes column
-		modelTypes := reflect.TypeOf(models).Elem()
+		fieldsIndexSelected := make([]int, 0)
 		modelType := reflect.TypeOf(CodeModel{})
-		indexes, er2 := getColumnIndexes(modelType, columns, l.Map)
-		if er2 != nil {
-			return nil, er2
+		// get list indexes column
+		fieldsIndex, er3 := getColumnIndexes(modelType, l.Map)
+		if er3 != nil {
+			return models, er3
 		}
-		tb, er3 := scanType(rows, modelTypes, indexes)
+		for _, columnsName := range columns {
+			if index, ok := fieldsIndex[columnsName]; ok {
+				fieldsIndexSelected = append(fieldsIndexSelected, index)
+			}
+		}
+		tb, er3 := scanType(rows, modelType, fieldsIndexSelected)
 		if er3 != nil {
 			return nil, er3
 		}
@@ -237,7 +254,15 @@ func (l SqlCodeLoader) Load(ctx context.Context, master string) ([]CodeModel, er
 	return models, nil
 }
 
-// StructScan : transfer struct to slice for scan
+func scanType(rows *sql.Rows, modelType reflect.Type, indexes []int) (t []interface{}, err error) {
+	for rows.Next() {
+		initModel := reflect.New(modelType).Interface()
+		if err = rows.Scan(structScan(initModel, indexes)...); err == nil {
+			t = append(t, initModel)
+		}
+	}
+	return
+}
 func structScan(s interface{}, indexColumns []int) (r []interface{}) {
 	if s != nil {
 		maps := reflect.Indirect(reflect.ValueOf(s))
@@ -247,24 +272,23 @@ func structScan(s interface{}, indexColumns []int) (r []interface{}) {
 	}
 	return
 }
-func getColumnIndexes(modelType reflect.Type, columnsName []string, build func(string) string) (indexes []int, err error) {
+func getColumnIndexes(modelType reflect.Type, mp func(col string) string) (map[string]int, error) {
+	mapp := make(map[string]int, 0)
 	if modelType.Kind() != reflect.Struct {
-		return nil, errors.New("bad type")
+		return mapp, errors.New("bad type")
 	}
 	for i := 0; i < modelType.NumField(); i++ {
 		field := modelType.Field(i)
 		ormTag := field.Tag.Get("gorm")
 		column, ok := findTag(ormTag, "column")
-		if build != nil {
-			column = build(column)
-		}
 		if ok {
-			if contains(columnsName, column) {
-				indexes = append(indexes, i)
+			if mp != nil {
+				column = mp(column)
 			}
+			mapp[column] = i
 		}
 	}
-	return
+	return mapp, nil
 }
 func findTag(tag string, key string) (string, bool) {
 	if has := strings.Contains(tag, key); has {
@@ -280,25 +304,6 @@ func findTag(tag string, key string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func contains(array []string, v string) bool {
-	for _, s := range array {
-		if s == v {
-			return true
-		}
-	}
-	return false
-}
-
-func scanType(rows *sql.Rows, modelTypes reflect.Type, indexes []int) (t []interface{}, err error) {
-	for rows.Next() {
-		initArray := reflect.New(modelTypes).Interface()
-		if err = rows.Scan(structScan(initArray, indexes)...); err == nil {
-			t = append(t, initArray)
-		}
-	}
-	return
 }
 
 func buildParam(i int) string {
