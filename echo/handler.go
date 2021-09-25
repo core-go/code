@@ -67,41 +67,39 @@ func NewCodeHandlerWithLog(load func(ctx context.Context, master string) ([]co.M
 	h := Handler{Codes: load, Resource: resource, Action: action, RequiredMaster: requiredMaster, Log: writeLog, Error: logError}
 	return &h
 }
-func (h *Handler) Load() echo.HandlerFunc {
-	return func(ctx echo.Context) error {
-		r := ctx.Request()
-		code := ""
-		if h.RequiredMaster {
-			if r.Method == "GET" {
-				i := strings.LastIndex(r.RequestURI, "/")
-				if i >= 0 {
-					code = r.RequestURI[i+1:]
-				}
-			} else {
-				b, er1 := ioutil.ReadAll(r.Body)
-				if er1 != nil {
-					ctx.String(http.StatusBadRequest, "Body cannot is empty")
-					return er1
-				}
-				code = strings.Trim(string(b), " ")
+func (h *Handler) Load(ctx echo.Context) error {
+	r := ctx.Request()
+	code := ""
+	if h.RequiredMaster {
+		if r.Method == "GET" {
+			i := strings.LastIndex(r.RequestURI, "/")
+			if i >= 0 {
+				code = r.RequestURI[i+1:]
 			}
-		}
-		result, er4 := h.Codes(r.Context(), code)
-		if er4 != nil {
-			return respondError(ctx, http.StatusInternalServerError, internalServerError, h.Error, h.Resource, h.Action, er4, h.Log)
 		} else {
-			if len(h.Id) == 0 && len(h.Name) == 0 {
-				return succeed(ctx, http.StatusOK, result, h.Log, h.Resource, h.Action)
-			} else {
-				rs := make([]map[string]string, 0)
-				for _, r := range result {
-					m := make(map[string]string)
-					m[h.Id] = r.Id
-					m[h.Name] = r.Name
-					rs = append(rs, m)
-				}
-				return succeed(ctx, http.StatusOK, rs, h.Log, h.Resource, h.Action)
+			b, er1 := ioutil.ReadAll(r.Body)
+			if er1 != nil {
+				ctx.String(http.StatusBadRequest, "Body cannot is empty")
+				return er1
 			}
+			code = strings.Trim(string(b), " ")
+		}
+	}
+	result, er4 := h.Codes(r.Context(), code)
+	if er4 != nil {
+		return respondError(ctx, http.StatusInternalServerError, internalServerError, h.Error, h.Resource, h.Action, er4, h.Log)
+	} else {
+		if len(h.Id) == 0 && len(h.Name) == 0 {
+			return succeed(ctx, http.StatusOK, result, h.Log, h.Resource, h.Action)
+		} else {
+			rs := make([]map[string]string, 0)
+			for _, r := range result {
+				m := make(map[string]string)
+				m[h.Id] = r.Id
+				m[h.Name] = r.Name
+				rs = append(rs, m)
+			}
+			return succeed(ctx, http.StatusOK, rs, h.Log, h.Resource, h.Action)
 		}
 	}
 }
