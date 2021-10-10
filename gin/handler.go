@@ -14,7 +14,7 @@ const internalServerError = "Internal Server Error"
 type Handler struct {
 	Codes          func(ctx context.Context, master string) ([]co.Model, error)
 	RequiredMaster bool
-	Error          func(context.Context, string)
+	Error          func(context.Context, string, ...map[string]interface{})
 	Log            func(ctx context.Context, resource string, action string, success bool, desc string) error
 	Resource       string
 	Action         string
@@ -22,14 +22,14 @@ type Handler struct {
 	Name           string
 }
 
-func NewDefaultCodeHandler(load func(ctx context.Context, master string) ([]co.Model, error), logError func(context.Context, string), options ...func(context.Context, string, string, bool, string) error) *Handler {
+func NewDefaultCodeHandler(load func(ctx context.Context, master string) ([]co.Model, error), logError func(context.Context, string, ...map[string]interface{}), options ...func(context.Context, string, string, bool, string) error) *Handler {
 	var writeLog func(context.Context, string, string, bool, string) error
 	if len(options) >= 1 {
 		writeLog = options[0]
 	}
 	return NewCodeHandlerWithLog(load, logError, true, writeLog, "", "")
 }
-func NewCodeHandlerByConfig(load func(ctx context.Context, master string) ([]co.Model, error), c co.HandlerConfig, logError func(context.Context, string), options ...func(context.Context, string, string, bool, string) error) *Handler {
+func NewCodeHandlerByConfig(load func(ctx context.Context, master string) ([]co.Model, error), c co.HandlerConfig, logError func(context.Context, string, ...map[string]interface{}), options ...func(context.Context, string, string, bool, string) error) *Handler {
 	var requireMaster bool
 	if c.Master != nil {
 		requireMaster = *c.Master
@@ -45,14 +45,14 @@ func NewCodeHandlerByConfig(load func(ctx context.Context, master string) ([]co.
 	h.Name = c.Name
 	return h
 }
-func NewCodeHandler(load func(ctx context.Context, master string) ([]co.Model, error), logError func(context.Context, string), requiredMaster bool, options ...func(context.Context, string, string, bool, string) error) *Handler {
+func NewCodeHandler(load func(ctx context.Context, master string) ([]co.Model, error), logError func(context.Context, string, ...map[string]interface{}), requiredMaster bool, options ...func(context.Context, string, string, bool, string) error) *Handler {
 	var writeLog func(context.Context, string, string, bool, string) error
 	if len(options) >= 1 {
 		writeLog = options[0]
 	}
 	return NewCodeHandlerWithLog(load, logError, requiredMaster, writeLog, "", "")
 }
-func NewCodeHandlerWithLog(load func(ctx context.Context, master string) ([]co.Model, error), logError func(context.Context, string), requiredMaster bool, writeLog func(context.Context, string, string, bool, string) error, options ...string) *Handler {
+func NewCodeHandlerWithLog(load func(ctx context.Context, master string) ([]co.Model, error), logError func(context.Context, string, ...map[string]interface{}), requiredMaster bool, writeLog func(context.Context, string, string, bool, string) error, options ...string) *Handler {
 	var resource, action string
 	if len(options) >= 1 && len(options[0]) > 0 {
 		resource = options[0]
@@ -110,7 +110,7 @@ func respond(ctx *gin.Context, code int, result interface{}, writeLog func(conte
 		writeLog(ctx.Request.Context(), resource, action, success, desc)
 	}
 }
-func respondError(ctx *gin.Context, code int, result interface{}, logError func(context.Context, string), resource string, action string, err error, writeLog func(context.Context, string, string, bool, string) error) {
+func respondError(ctx *gin.Context, code int, result interface{}, logError func(context.Context, string, ...map[string]interface{}), resource string, action string, err error, writeLog func(context.Context, string, string, bool, string) error) {
 	if logError != nil {
 		logError(ctx.Request.Context(), err.Error())
 	}
