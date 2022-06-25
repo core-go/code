@@ -106,13 +106,13 @@ func (h *Handler) Load(ctx echo.Context) error {
 }
 
 type QueryHandler struct {
-	Load     func(ctx context.Context, key string, max int64) ([]string, error)
+	Load     func(ctx context.Context, key string, max int64) ([]co.Model, error)
 	LogError func(context.Context, string, ...map[string]interface{})
 	Keyword  string
 	Max      string
 }
 
-func NewQueryHandler(load func(ctx context.Context, key string, max int64) ([]string, error), logError func(context.Context, string, ...map[string]interface{}), opts ...string) *QueryHandler {
+func NewQueryHandler(load func(ctx context.Context, key string, max int64) ([]co.Model, error), logError func(context.Context, string, ...map[string]interface{}), opts ...string) *QueryHandler {
 	keyword := "q"
 	if len(opts) > 0 && len(opts[0]) > 0 {
 		keyword = opts[0]
