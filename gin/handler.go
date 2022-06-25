@@ -2,6 +2,7 @@ package gin
 
 import (
 	"context"
+	"encoding/json"
 	co "github.com/core-go/code"
 	"github.com/gin-gonic/gin"
 	"io/ioutil"
@@ -106,22 +107,28 @@ func (h *Handler) Load(ctx *gin.Context) {
 }
 
 type QueryHandler struct {
-	Load     func(ctx context.Context, key string, max int64) ([]co.Model, error)
+	Get      func(ctx context.Context, key string, max int64) ([]co.Model, error)
+	Select   func(ctx context.Context, key []string) ([]co.Model, error)
 	LogError func(context.Context, string, ...map[string]interface{})
 	Keyword  string
 	Max      string
+	Q        string
 }
 
-func NewQueryHandler(load func(ctx context.Context, key string, max int64) ([]co.Model, error), logError func(context.Context, string, ...map[string]interface{}), opts ...string) *QueryHandler {
-	keyword := "q"
+func NewQueryHandler(load func(ctx context.Context, key string, max int64) ([]co.Model, error), getData func(ctx context.Context, key []string) ([]co.Model, error), logError func(context.Context, string, ...map[string]interface{}), opts ...string) *QueryHandler {
+	q := "q"
 	if len(opts) > 0 && len(opts[0]) > 0 {
-		keyword = opts[0]
+		q = opts[0]
+	}
+	keyword := "q"
+	if len(opts) > 1 && len(opts[1]) > 0 {
+		keyword = opts[1]
 	}
 	max := "max"
-	if len(opts) > 1 && len(opts[1]) > 0 {
-		max = opts[1]
+	if len(opts) > 2 && len(opts[2]) > 0 {
+		max = opts[2]
 	}
-	return &QueryHandler{load, logError, keyword, max}
+	return &QueryHandler{load, getData, logError, keyword, max, q}
 }
 func (h *QueryHandler) Query(ctx *gin.Context) {
 	ps := ctx.Request.URL.Query()
@@ -138,7 +145,7 @@ func (h *QueryHandler) Query(ctx *gin.Context) {
 		if i < 0 {
 			i = 20
 		}
-		vs, err := h.Load(ctx.Request.Context(), keyword, i)
+		vs, err := h.Get(ctx.Request.Context(), keyword, i)
 		if err != nil {
 			h.LogError(ctx.Request.Context(), err.Error())
 			ctx.String(http.StatusInternalServerError, internalServerError)
@@ -147,7 +154,34 @@ func (h *QueryHandler) Query(ctx *gin.Context) {
 		}
 	}
 }
-
+func (h *QueryHandler) Load(ctx *gin.Context) {
+	r := ctx.Request
+	var req = make([]string, 0)
+	method := r.Method
+	if method == http.MethodGet {
+		q := r.URL.Query().Get(h.Q)
+		if len(q) > 0 {
+			req = strings.Split(q, ",")
+		}
+	} else {
+		err := json.NewDecoder(r.Body).Decode(&req)
+		if err != nil {
+			ctx.String(http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if len(req) == 0 {
+		ctx.JSON(http.StatusOK, req)
+	} else {
+		models, err := h.Select(r.Context(), req)
+		if err != nil {
+			h.LogError(r.Context(), err.Error())
+			ctx.String(http.StatusInternalServerError, internalServerError)
+		} else {
+			ctx.JSON(http.StatusOK, models)
+		}
+	}
+}
 func respond(ctx *gin.Context, code int, result interface{}, writeLog func(context.Context, string, string, bool, string) error, resource string, action string, success bool, desc string) {
 	ctx.JSON(code, result)
 	if writeLog != nil {

@@ -63,22 +63,24 @@ type DynamicSqlLoader struct {
 type Query struct {
 	DB             *sql.DB
 	Select         string
+	Get            string
 	ParameterCount int
+	Build          func(i int) string
 	Map            func(col string) string
 	driver         string
 	colMap         map[string]int
 	modelType      reflect.Type
 }
-func NewDefaultQuery(db *sql.DB, query string, options ...int) (*Query, error) {
+func NewDefaultQuery(db *sql.DB, query string, getQuery string, options ...int) (*Query, error) {
 	var parameterCount int
 	if len(options) > 0 {
 		parameterCount = options[0]
 	} else {
 		parameterCount = 1
 	}
-	return NewQuery(db, query, parameterCount, true)
+	return NewQuery(db, query, getQuery, parameterCount, true)
 }
-func NewQuery(db *sql.DB, query string, parameterCount int, options ...bool) (*Query, error) {
+func NewQuery(db *sql.DB, query string, getQuery string, parameterCount int, options ...bool) (*Query, error) {
 	driver := getDriver(db)
 	var mp func(string) string
 	if driver == driverOracle {
@@ -100,6 +102,7 @@ func NewQuery(db *sql.DB, query string, parameterCount int, options ...bool) (*Q
 	} else {
 		handleDriver = true
 	}
+	build := getBuild(db)
 	if handleDriver {
 		if driver == driverOracle || driver == driverPostgres || driver == driverMssql {
 			var x string
@@ -116,7 +119,7 @@ func NewQuery(db *sql.DB, query string, parameterCount int, options ...bool) (*Q
 			}
 		}
 	}
-	return &Query{DB: db, Select: query, ParameterCount: parameterCount, Map: mp, colMap: fieldsIndex, modelType: modelType}, nil
+	return &Query{DB: db, Select: query, Get: getQuery, Build: build,ParameterCount: parameterCount, Map: mp, colMap: fieldsIndex, modelType: modelType}, nil
 }
 func (l Query) Query(ctx context.Context, key string, max int64) ([]Model, error) {
 	if max <= 0 {
@@ -145,6 +148,46 @@ func (l Query) Query(ctx context.Context, key string, max int64) ([]Model, error
 		rows, er1 = l.DB.QueryContext(ctx, query)
 	}
 
+	if er1 != nil {
+		return models, er1
+	}
+	defer rows.Close()
+	columns, er2 := rows.Columns()
+	if er2 != nil {
+		return models, er2
+	}
+
+	fieldsIndexSelected := make([]int, 0)
+	fieldsIndex := l.colMap
+	for _, columnsName := range columns {
+		if index, ok := fieldsIndex[columnsName]; ok {
+			fieldsIndexSelected = append(fieldsIndexSelected, index)
+		}
+	}
+	tb, er4 := scanType(rows, l.modelType, fieldsIndexSelected)
+	if er4 != nil {
+		return models, er4
+	}
+	for _, v := range tb {
+		if c, ok := v.(*Model); ok {
+			models = append(models, *c)
+		}
+	}
+	return models, nil
+}
+func (l Query) Load(ctx context.Context, key []string) ([]Model, error) {
+	models := make([]Model, 0)
+	var rows *sql.Rows
+	var er1 error
+	le := len(key)
+	args := make([]interface{}, 0)
+	params := make([]string, 0)
+	for i := 1; i <= le; i++ {
+		params = append(params, l.Build(i))
+		args = append(args, key[i - 1])
+	}
+	query := l.Get + fmt.Sprintf(" (%s)", strings.Join(params, ","))
+	rows, er1 = l.DB.QueryContext(ctx, query, args...)
 	if er1 != nil {
 		return models, er1
 	}
